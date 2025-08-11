@@ -10,6 +10,7 @@ import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {PoolId} from "v4-core/types/PoolId.sol";
 import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
 import {SwapParams, ModifyLiquidityParams} from "v4-core/types/PoolOperation.sol";
+import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/types/BeforeSwapDelta.sol";
 
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 
@@ -17,6 +18,7 @@ import {Hooks} from "v4-core/libraries/Hooks.sol";
 
 contract PointsHook is BaseHook, ERC1155 {
     constructor(IPoolManager _manager) BaseHook(_manager) {}
+    error SwapTooLarge();
 
     function getHookPermissions()
         public
@@ -32,7 +34,7 @@ contract PointsHook is BaseHook, ERC1155 {
                 beforeRemoveLiquidity: false,
                 afterAddLiquidity: false,
                 afterRemoveLiquidity: false,
-                beforeSwap: false,
+                beforeSwap: true,
                 afterSwap: true,
                 beforeDonate: false,
                 afterDonate: false,
@@ -68,6 +70,32 @@ contract PointsHook is BaseHook, ERC1155 {
         _assignPoints(key.toId(), hookData, points);
 
         return (this.afterSwap.selector, 0);
+    }
+
+    function _beforeSwap(
+        address,
+        PoolKey calldata key,
+        SwapParams calldata params,
+        bytes calldata
+    ) internal pure override returns (bytes4, BeforeSwapDelta, uint24) {
+        // Only apply to pools with ETH as currency0 (example)
+        if (!key.currency0.isAddressZero()) {
+            return (
+                this.beforeSwap.selector,
+                BeforeSwapDeltaLibrary.ZERO_DELTA,
+                0
+            );
+        }
+
+        // get absolute of amountSpecified safely
+        int256 a = int256(params.amountSpecified);
+        uint256 abs = uint256(a < 0 ? -a : a);
+
+        if (abs > 1 ether) {
+            revert SwapTooLarge();
+        }
+
+        return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
     }
 
     function _assignPoints(

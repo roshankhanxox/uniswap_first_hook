@@ -21,6 +21,8 @@ import {LiquidityAmounts} from "@uniswap/v4-core/test/utils/LiquidityAmounts.sol
 
 import {ERC1155TokenReceiver} from "solmate/src/tokens/ERC1155.sol";
 
+import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/types/BeforeSwapDelta.sol";
+
 import "forge-std/console.sol";
 import {PointsHook} from "../src/PointsHook.sol";
 
@@ -55,10 +57,14 @@ contract TestPointsHook is Test, Deployers, ERC1155TokenReceiver {
         token.mint(address(1), 1000 ether);
 
         //dloy hook to an address that has proper flags set
-        uint160 flags = uint160(Hooks.AFTER_SWAP_FLAG);
-        deployCodeTo("PointsHook.sol", abi.encode(manager), address(flags));
+        // uint160 flags = uint160(Hooks.AFTER_SWAP_FLAG);
+        // deployCodeTo("PointsHook.sol", abi.encode(manager), address(flags));
 
-        //casting the already deployed hooks address to a points contract so that we can interact with it
+        // //casting the already deployed hooks address to a points contract so that we can interact with it
+        // hook = PointsHook(address(flags));
+
+        uint160 flags = uint160(Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG);
+        deployCodeTo("PointsHook.sol", abi.encode(manager), address(flags));
         hook = PointsHook(address(flags));
 
         //provide approval to the swaprouter and the modify liquidity router
@@ -107,23 +113,17 @@ contract TestPointsHook is Test, Deployers, ERC1155TokenReceiver {
 
     function test_swap() public {
         uint256 poolIdUint = uint256(PoolId.unwrap(key.toId()));
-        uint256 pointsBalanceOriginal = hook.balanceOf(
-            address(this),
-            poolIdUint
-        );
+        uint256 beforeBalance = hook.balanceOf(address(this), poolIdUint);
 
-        // Set user address in hook data
+        // Encode the recipient of points
         bytes memory hookData = abi.encode(address(this));
 
-        // Now we swap
-        // We will swap 0.001 ether for tokens
-        // We should get 20% of 0.001 * 10**18 points
-        // = 2 * 10**14
+        // Swap 0.001 ETH for token
         swapRouter.swap{value: 0.001 ether}(
             key,
             SwapParams({
-                zeroForOne: true,
-                amountSpecified: -0.001 ether, // Exact input for output swap
+                zeroForOne: true, // ETH -> Token
+                amountSpecified: -0.001 ether, // Exact input swap
                 sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
             }),
             PoolSwapTest.TestSettings({
@@ -132,10 +132,30 @@ contract TestPointsHook is Test, Deployers, ERC1155TokenReceiver {
             }),
             hookData
         );
-        uint256 pointsBalanceAfterSwap = hook.balanceOf(
-            address(this),
-            poolIdUint
+
+        uint256 afterBalance = hook.balanceOf(address(this), poolIdUint);
+
+        // Points = ethSpent / 5 = 0.001 ether / 5 = 0.0002 ether (in points units)
+        assertEq(afterBalance - beforeBalance, 0.0002 ether);
+    }
+
+    function test_swapTooLarge_reverts() public {
+        bytes memory hookData = abi.encode(address(this));
+
+        vm.expectRevert();
+
+        swapRouter.swap{value: 2 ether}(
+            key,
+            SwapParams({
+                zeroForOne: true,
+                amountSpecified: -2 ether,
+                sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            }),
+            PoolSwapTest.TestSettings({
+                takeClaims: false,
+                settleUsingBurn: false
+            }),
+            hookData
         );
-        assertEq(pointsBalanceAfterSwap - pointsBalanceOriginal, 2 * 10 ** 14);
     }
 }
